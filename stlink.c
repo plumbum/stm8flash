@@ -518,7 +518,10 @@ int stlink_swim_write_range(programmer_t *pgm, stm8_device_t *device, char *buff
 					sizeof(block) - block_size);
 			block_size = sizeof(block);
 		}
-		stlink_swim_write_byte(pgm, 0x01, device->regs.FLASH_CR2);
+		stlink_swim_write_byte(pgm, 0x81, device->regs.FLASH_CR2); // Enable write eeprom and opts
+        if(device->regs.FLASH_NCR2 != 0) { // Device have FLASH_NCR2 register
+            stlink_swim_write_byte(pgm, 0x7E, device->regs.FLASH_NCR2);
+        }
 		int result = stlink_swim_write_block(pgm, block, start + i, block_size, 0);
 		if(result & STLK_FLAG_ERR)
 			fprintf(stderr, "Write error\n");

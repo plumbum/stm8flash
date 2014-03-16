@@ -1,4 +1,4 @@
-/* stlink/v2 stm8 memory programming utility
+/* stlink/v2 stm8 memory programming u-f tility
    (c) Valentin Dudouyt, 2012 - 2014 */
 
 #include <stdio.h>
@@ -11,6 +11,20 @@
 #include "stlink.h"
 #include "stlinkv2.h"
 #include "stm8.h"
+
+typedef enum {
+    UNKNOWN,
+    RAM,
+    EEPROM,
+    FLASH,
+    OPT,
+} memtype_t;
+
+typedef enum {
+    NONE = 0,
+    READ,
+    WRITE
+} action_t;
 
 programmer_t pgms[] = {
 	{ 	"stlink",
@@ -96,24 +110,16 @@ int main(int argc, char **argv) {
 	memset(filename, 0, sizeof(filename));
 	// Parsing command line
 	char c;
-	enum {
-		NONE = 0,
-		READ,
-		WRITE
-	} action = NONE;
+	action_t action = NONE;
 	bool start_addr_specified = false,
 		pgm_specified = false,
-		part_specified = false;
-	enum {
-		UNKNOWN,
-		RAM,
-		EEPROM,
-		FLASH,
-	} memtype = FLASH;
+		part_specified = false,
+        bytes_count_specified = false;
+	memtype_t memtype = FLASH;
 	int i;
 	programmer_t *pgm = NULL;
 	stm8_device_t *part = NULL;
-	while((c = getopt (argc, argv, "r:w:nc:p:s:b:")) != -1) {
+	while((c = getopt (argc, argv, "r:w:nc:p:s:b:d:")) != -1) {
 		switch(c) {
 			case 'c':
 				pgm_specified = true;
@@ -139,9 +145,15 @@ int main(int argc, char **argv) {
 				break;
 			case 's':
 				start_addr_specified = true;
-				if(!strcmp(optarg, "flash")) {
+				if(strcasecmp(optarg, "flash") == 0) {
 					// Start addr is depending on MCU type
 					memtype = FLASH;
+                } else if(strcasecmp(optarg, "eeprom") == 0) {
+					memtype = EEPROM;
+                } else if(strcasecmp(optarg, "ram") == 0) {
+					memtype = RAM;
+                } else if(strcasecmp(optarg, "opt") == 0) {
+					memtype = OPT;
 				} else {
 					// Start addr is specified explicitely
 					memtype = UNKNOWN;
@@ -151,7 +163,10 @@ int main(int argc, char **argv) {
 				break;
 			case 'b':
 				bytes_count = atoi(optarg);
+                bytes_count_specified = true;
 				break;
+            case 'o':
+                break;
 			default:
 				print_help_and_exit(argv[0]);
 		}
@@ -180,15 +195,33 @@ int main(int argc, char **argv) {
 		switch(memtype) {
 			case RAM:
 				start = part->ram_start;
-				bytes_count = part->ram_size;
+                if(!bytes_count_specified || bytes_count > part->ram_size) {
+                    bytes_count = part->ram_size;
+                }
 				break;
 			case EEPROM:
 				start = part->eeprom_start;
-				bytes_count = part->eeprom_size;
+                if(!bytes_count_specified || bytes_count > part->eeprom_size) {
+                    bytes_count = part->eeprom_size;
+                }
 				break;
 			case FLASH:
 				start = part->flash_start;
-				bytes_count = part->flash_size;
+                if(!bytes_count_specified || bytes_count > part->flash_size) {
+                    bytes_count = part->flash_size;
+                }
+				break;
+			case OPT:
+				start = part->opt_start;
+                // We use constans read & write blocks for OPT
+                if(!bytes_count_specified) {
+                if(action == READ) { // Different sizes for read and write
+                    bytes_count = part->opt_rd_size;
+                } else {
+                    bytes_count = part->opt_size;
+                }
+                bytes_count_specified = true;
+                }
 				break;
 		}
 	}
@@ -206,7 +239,7 @@ int main(int argc, char **argv) {
 		spawn_error("Error communicating with MCU. Please check your SWIM connection.");
 	FILE *f;
 	if(action == READ) {
-		fprintf(stderr, "Reading at 0x%x... ", start);
+		fprintf(stderr, "Reading %d bytes at 0x%x... ", bytes_count, start);
 		fflush(stderr);
 		char *buf = malloc(bytes_count);
 		if(!buf) spawn_error("malloc failed");
@@ -217,7 +250,6 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "OK\n");
 		fprintf(stderr, "Bytes received: %d\n", recv);
 	} else if (action == WRITE) {
-		fprintf(stderr, "Writing at 0x%x... ", start);
 		f = fopen(filename, "r");
 		char *buf = malloc(bytes_count);
 		int bytes_to_write;
@@ -228,10 +260,14 @@ int main(int argc, char **argv) {
 		} else {
 			fseek(f, 0L, SEEK_END);
 			bytes_to_write = ftell(f);
+            if(bytes_count_specified && bytes_count < bytes_to_write) {
+                bytes_to_write = bytes_count; 
+            }
 			if(!buf) spawn_error("malloc failed");
 			fseek(f, 0, SEEK_SET);
 			fread(buf, 1, bytes_to_write, f);
 		}
+		fprintf(stderr, "Writing %d bytes at 0x%x... ", bytes_to_write, start);
 
 		/* flashing MCU */
 		int sent = pgm->write_range(pgm, part, buf, start, bytes_to_write);
